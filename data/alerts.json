@@ -1,0 +1,29 @@
+{
+  "7111943810": [
+    {
+      "price": 105900.0,
+      "triggered": false
+    },
+    {
+      "price": 105800.0,
+      "triggered": false
+    },
+    {
+      "low": 69500.0,
+      "high": 70500.0,
+      "triggered": false
+    },
+    {
+      "low": 105600.0,
+      "high": 105888.0,
+      "triggered": false
+    },
+    {
+      "low": 104600.0,
+      "high": 105888.0,
+      "triggered": false
+    }
+  ]
+}
+
+

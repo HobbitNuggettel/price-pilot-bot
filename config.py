@@ -1,0 +1,3 @@
+# config.py
+TELEGRAM_BOT_TOKEN = "7627708355:AAF2XJ9APZlVY_ArfSJoV6v8CVnAoFJvF4o"
+CHAT_ID = "YOUR_CHAT_ID"  # Optional for testing
