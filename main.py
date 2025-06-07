@@ -109,21 +109,19 @@ async def listalerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 # Scheduler job - now supports both target price and range alerts
-async def hourly_check(context: ContextTypes.DEFAULT_TYPE):
+async def hourly_check(context):
     logging.info("Running BTC price check...")
+    app = context.job.context  # Get the app instance
     alerts = load_alerts()
     current_price = get_btc_price()
 
     triggered = []
     for user_id, targets in alerts.items():
         for alert in targets:
-            # Handle regular price alerts
             if "price" in alert:
                 if not alert["triggered"] and current_price >= alert["price"]:
                     alert["triggered"] = True
                     triggered.append((user_id, alert))
-
-            # Handle range alerts
             elif "low" in alert and "high" in alert:
                 if not alert["triggered"] and alert["low"] <= current_price <= alert["high"]:
                     alert["triggered"] = True
@@ -136,7 +134,7 @@ async def hourly_check(context: ContextTypes.DEFAULT_TYPE):
             msg = f"🚨 BTC has reached your target price: ${alert['price']:,.2f}!"
         else:
             msg = f"🔔 BTC is in your target range: ${alert['low']:,.2f} - ${alert['high']:,.2f}"
-        await context.bot.send_message(chat_id=user_id, text=msg)
+        await app.bot.send_message(chat_id=user_id, text=msg)
 
 # Main function
 def main():
@@ -148,8 +146,9 @@ def main():
     app.add_handler(CommandHandler("setrangalert", setrangalert))
     app.add_handler(CommandHandler("listalerts", listalerts))
 
+    # Use BackgroundScheduler instead of AsyncIOScheduler
     scheduler = BackgroundScheduler()
-    scheduler.add_job(lambda: hourly_check(app), 'interval',minutes=10)
+    scheduler.add_job(hourly_check, 'interval', minutes=10, args=[app])
     scheduler.start()
 
     print("Bot started...")
