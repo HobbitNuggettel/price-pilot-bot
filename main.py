@@ -2,6 +2,7 @@ import logging
 import json
 import requests
 import threading
+import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -17,14 +18,30 @@ from config import TELEGRAM_BOT_TOKEN
 ALERTS_FILE = "data/alerts.json"
 
 # Helper functions
-def get_btc_price():
-    url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+def get_btc_price(coin="bitcoin"):
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd"
     try:
-        response = requests.get(url).json()
-        return response.get('bitcoin', {}).get('usd', None)
+        logging.info(f"Fetching price for {coin} from {url}")
+        response = requests.get(url)
+        
+        if response.status_code != 200:
+            logging.error(f"API request failed with status code {response.status_code}")
+            return None
+
+        data = response.json()
+        price = data.get(coin, {}).get("usd", None)
+
+        if price is None:
+            logging.warning(f"No price found in API response for {coin}")
+            return None
+
+        logging.info(f"{coin.upper()} Price: ${price:,.2f}")
+        return price
+
     except Exception as e:
-        logging.error(f"Error fetching BTC price: {e}")
+        logging.error(f"Error fetching price for {coin}: {str(e)}", exc_info=True)
         return None
+
 
 def load_alerts():
     try:
@@ -33,9 +50,11 @@ def load_alerts():
     except Exception:
         return {}
 
+
 def save_alerts(alerts):
     with open(ALERTS_FILE, 'w') as f:
         json.dump(alerts, f, indent=2)
+
 
 # Commands 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -44,12 +63,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     "Use /setalert 70000 to set a price alert.\n"
                                     "Use /setrangalert 69500 70500 to set a price range alert.")
 
+
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price = get_btc_price()
     if price is not None:
         await update.message.reply_text(f"BTC Price: ${price:,.2f}")
     else:
         await update.message.reply_text("Failed to fetch BTC price. Please try again later.")
+
 
 async def setalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
@@ -72,6 +93,7 @@ async def setalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_alerts(alerts)
 
     await update.message.reply_text(f"Alert set at ${target_price:,.2f}")
+
 
 async def setrangalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 2:
@@ -100,6 +122,7 @@ async def setrangalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"Range alert set: ${low:,.2f} - ${high:,.2f}")
 
+
 async def listalerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     alerts = load_alerts().get(user_id, [])
@@ -117,6 +140,7 @@ async def listalerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(msg)
 
+
 # Scheduler job
 async def hourly_check(context):
     logging.info("Running BTC price check...")
@@ -124,15 +148,21 @@ async def hourly_check(context):
     alerts = load_alerts()
     current_price = get_btc_price()
 
+    if current_price is None:
+        logging.error("BTC price is None. Skipping alert check.")
+        return
+
     triggered = []
     for user_id, targets in alerts.items():
         for alert in targets:
             if "price" in alert:
                 if not alert["triggered"] and current_price >= alert["price"]:
+                    logging.info(f"Alert triggered for user {user_id}: ${alert['price']}")
                     alert["triggered"] = True
                     triggered.append((user_id, alert))
             elif "low" in alert and "high" in alert:
                 if not alert["triggered"] and alert["low"] <= current_price <= alert["high"]:
+                    logging.info(f"Range alert triggered for user {user_id}: ${alert['low']} - ${alert['high']}")
                     alert["triggered"] = True
                     triggered.append((user_id, alert))
 
@@ -145,9 +175,11 @@ async def hourly_check(context):
             msg = f"🔔 BTC is in your target range: ${alert['low']:,.2f} - ${alert['high']:,.2f}"
         await app.bot.send_message(chat_id=user_id, text=msg)
 
+
 # Error handler
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logging.error(f"Update {update} caused error {context.error}")
+    logging.error(f"Update {update} caused error {context.error}", exc_info=True)
+
 
 # Main function
 def main():
@@ -155,18 +187,23 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("price", price))
-    app.add_handler(CommandHandler("setalert", setalert))
-    app.add_handler(CommandHandler("setrangalert", setrangalert))
-    app.add_handler(CommandHandler("listalerts", listalerts))
+    # Only add handlers and start polling if DISABLE_POLLING is not set
+    if os.getenv("DISABLE_POLLING") != "true":
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("price", price))
+        app.add_handler(CommandHandler("setalert", setalert))
+        app.add_handler(CommandHandler("setrangalert", setrangalert))
+        app.add_handler(CommandHandler("listalerts", listalerts))
 
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(hourly_check, 'interval', minutes=10, args=[app])
-    scheduler.start()
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(hourly_check, 'interval', minutes=10, args=[app])
+        scheduler.start()
 
-    print("Bot started...")
-    app.run_polling()
+        print("Bot started...")
+        app.run_polling()
+    else:
+        logging.info("Polling disabled via DISABLE_POLLING")
+
 
 if __name__ == "__main__":
     # Start dummy HTTP server on port 8080
