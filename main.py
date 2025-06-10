@@ -17,8 +17,12 @@ ALERTS_FILE = "data/alerts.json"
 # Helper functions
 def get_btc_price():
     url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-    response = requests.get(url).json()
-    return response['bitcoin']['usd']
+    try:
+        response = requests.get(url).json()
+        return response.get('bitcoin', {}).get('usd', None)
+    except Exception as e:
+        logging.error(f"Error fetching BTC price: {e}")
+        return None
 
 def load_alerts():
     try:
