@@ -1,9 +1,12 @@
 import logging
 import json
 import requests
+import threading
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 
 # Setup logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -159,4 +162,17 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
+
+    # Start a dummy HTTP server on port 8080 (required by Render)
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Hello from Render!")
+
+    server = HTTPServer(('localhost', 8080), Handler)
+    server_thread = threading.Thread(target=server.serve_forever)
+    server_thread.daemon = True
+    server_thread.start()
+
     main()
