@@ -7,7 +7,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-
 # Setup logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -48,9 +47,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price = get_btc_price()
     if price is not None:
-     await update.message.reply_text(f"BTC Price: ${price:,.2f}")
+        await update.message.reply_text(f"BTC Price: ${price:,.2f}")
     else:
-     await update.message.reply_text("Failed to fetch BTC price. Please try again later.")
+        await update.message.reply_text("Failed to fetch BTC price. Please try again later.")
 
 async def setalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
@@ -118,7 +117,7 @@ async def listalerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(msg)
 
-# Scheduler job - now supports both target price and range alerts
+# Scheduler job
 async def hourly_check(context):
     logging.info("Running BTC price check...")
     app = context.job.context  # Get the app instance
@@ -146,14 +145,15 @@ async def hourly_check(context):
             msg = f"🔔 BTC is in your target range: ${alert['low']:,.2f} - ${alert['high']:,.2f}"
         await app.bot.send_message(chat_id=user_id, text=msg)
 
+# Error handler
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logging.error(f"Update {update} caused error {context.error}")
+
 # Main function
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_error_handler(error_handler)
-
-    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-     logging.error(f"Update {update} caused error {context.error}")
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("price", price))
@@ -161,7 +161,6 @@ def main():
     app.add_handler(CommandHandler("setrangalert", setrangalert))
     app.add_handler(CommandHandler("listalerts", listalerts))
 
-    # Use BackgroundScheduler instead of AsyncIOScheduler
     scheduler = BackgroundScheduler()
     scheduler.add_job(hourly_check, 'interval', minutes=10, args=[app])
     scheduler.start()
@@ -170,17 +169,16 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-
-    # Start a dummy HTTP server on port 8080 (required by Render)
+    # Start dummy HTTP server on port 8080
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"Hello from Render!")
 
-            def do_HEAD(self):
-             self.send_response(200)
-             self.end_headers()
+        def do_HEAD(self):
+            self.send_response(200)
+            self.end_headers()
 
         def log_message(self, format, *args):
             return  # Suppress logs
