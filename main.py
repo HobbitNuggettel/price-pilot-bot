@@ -47,7 +47,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price = get_btc_price()
-    await update.message.reply_text(f"BTC Price: ${price:,.2f}")
+    if price is not None:
+     await update.message.reply_text(f"BTC Price: ${price:,.2f}")
+    else:
+     await update.message.reply_text("Failed to fetch BTC price. Please try again later.")
 
 async def setalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
@@ -147,6 +150,11 @@ async def hourly_check(context):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
+    app.add_error_handler(error_handler)
+
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+     logging.error(f"Update {update} caused error {context.error}")
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("price", price))
     app.add_handler(CommandHandler("setalert", setalert))
@@ -170,7 +178,14 @@ if __name__ == "__main__":
             self.end_headers()
             self.wfile.write(b"Hello from Render!")
 
-    server = HTTPServer(('localhost', 8080), Handler)
+            def do_HEAD(self):
+             self.send_response(200)
+             self.end_headers()
+
+        def log_message(self, format, *args):
+            return  # Suppress logs
+
+    server = HTTPServer(('0.0.0.0', 8080), Handler)
     server_thread = threading.Thread(target=server.serve_forever)
     server_thread.daemon = True
     server_thread.start()
