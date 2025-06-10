@@ -3,6 +3,7 @@ import json
 import requests
 import threading
 import os
+import time
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -17,29 +18,47 @@ from config import TELEGRAM_BOT_TOKEN
 # File to store user alerts
 ALERTS_FILE = "data/alerts.json"
 
+# Global variable to store last known BTC price
+last_known_price = None
+
 # Helper functions
-def get_btc_price(coin="bitcoin"):
+def get_btc_price(coin="bitcoin", max_retries=3, retry_delay=10):
+    global last_known_price
+
     url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd"
-    try:
-        logging.info(f"Fetching price for {coin} from {url}")
-        response = requests.get(url)
-        
-        if response.status_code != 200:
-            logging.error(f"API request failed with status code {response.status_code}")
-            return None
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            logging.info(f"[Attempt {attempt}/{max_retries}] Fetching price for {coin} from {url}")
+            response = requests.get(url, timeout=15)
 
-        data = response.json()
-        price = data.get(coin, {}).get("usd", None)
+            if response.status_code == 200:
+                data = response.json()
+                price = data.get(coin, {}).get("usd", None)
 
-        if price is None:
-            logging.warning(f"No price found in API response for {coin}")
-            return None
+                if price is not None:
+                    last_known_price = price
+                    logging.info(f"{coin.upper()} Price: ${price:,.2f}")
+                    return price
+                else:
+                    logging.warning(f"No price found in API response for {coin}.")
+            elif response.status_code == 429:
+                logging.warning(f"Rate limited by CoinGecko (429). Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                logging.error(f"API request failed with status code {response.status_code}")
+                time.sleep(retry_delay)
 
-        logging.info(f"{coin.upper()} Price: ${price:,.2f}")
-        return price
+        except Exception as e:
+            logging.error(f"Error fetching price for {coin}: {str(e)}", exc_info=True)
+            time.sleep(retry_delay)
 
-    except Exception as e:
-        logging.error(f"Error fetching price for {coin}: {str(e)}", exc_info=True)
+    # If all retries fail, return last known price (fallback) 
+    if last_known_price is not None:
+        logging.warning(f"Returning last known price: ${last_known_price:,.2f} (from cache)")
+        return last_known_price
+    else:
+        logging.critical("Failed to fetch price after all retries and no cached price available.")
         return None
 
 
@@ -56,7 +75,7 @@ def save_alerts(alerts):
         json.dump(alerts, f, indent=2)
 
 
-# Commands 
+# Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Welcome to Price Pilot Bot!\n\n"
                                     "Use /price to get current BTC price.\n"
@@ -65,9 +84,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    price = get_btc_price()
+    coin = "bitcoin"
+    price = get_btc_price(coin)
     if price is not None:
-        await update.message.reply_text(f"BTC Price: ${price:,.2f}")
+        await update.message.reply_text(f"{coin.upper()} Price: ${price:,.2f}")
     else:
         await update.message.reply_text("Failed to fetch BTC price. Please try again later.")
 
@@ -181,22 +201,34 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logging.error(f"Update {update} caused error {context.error}", exc_info=True)
 
 
+async def testalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Forcing price check now...")
+    await hourly_check(context)
+    await update.message.reply_text("Price check forced.")
+
 # Main function
 def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # Add error handler
     app.add_error_handler(error_handler)
 
-    # Only add handlers and start polling if DISABLE_POLLING is not set
-    if os.getenv("DISABLE_POLLING") != "true":
+    # Check DISABLE_POLLING env var
+    disable_polling = os.getenv("DISABLE_POLLING", "false").lower() in ["true", "1", "yes"]
+
+    if not disable_polling:
+        logging.info("Starting Telegram bot with polling...")
+
+        # Add command handlers
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("price", price))
         app.add_handler(CommandHandler("setalert", setalert))
         app.add_handler(CommandHandler("setrangalert", setrangalert))
         app.add_handler(CommandHandler("listalerts", listalerts))
 
+        # Start scheduler
         scheduler = BackgroundScheduler()
-        scheduler.add_job(hourly_check, 'interval', minutes=10, args=[app])
+        scheduler.add_job(hourly_check, 'interval', minutes=10, args=[app], misfire_grace_time=60)
         scheduler.start()
 
         print("Bot started...")
