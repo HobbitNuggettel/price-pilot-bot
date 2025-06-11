@@ -2,3 +2,5 @@ python-telegram-bot==20.0
 requests
 APScheduler
 python-dotenv
+nest_asyncio
+flask
