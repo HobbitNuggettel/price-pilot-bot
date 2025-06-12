@@ -65,6 +65,12 @@ def init_db():
             triggered BOOLEAN DEFAULT 0
         )
     """)
+
+
+    # Subscriber tables
+    cur.execute("CREATE TABLE IF NOT EXISTS subscribers (user_id TEXT PRIMARY KEY)")
+    cur.execute("CREATE TABLE IF NOT EXISTS eth_subscribers (user_id TEXT PRIMARY KEY)")
+
     conn.commit()
     conn.close()
 
@@ -111,6 +117,36 @@ def load_alerts(include_triggered=False):
     conn.close()
     return alerts
 
+
+async def send_periodic_prices(app):
+    logging.info("Sending 30-min BTC & ETH price update...")
+
+    # Get current prices
+    btc_price = get_crypto_price("bitcoin", "btc")
+    eth_price = get_crypto_price("ethereum", "eth")
+
+    if btc_price is None or eth_price is None:
+        logging.warning("Failed to fetch prices for periodic message.")
+        return
+
+    # Get all subscribers
+    conn = sqlite3.connect("alerts.db")
+    cur = conn.cursor()
+    cur.execute("SELECT user_id FROM subscribers")
+    subscriber_rows = cur.fetchall()
+    conn.close()
+
+    # Send messages
+    msg = f"₿ Bitcoin (BTC): ${btc_price:,.2f}\n"
+    msg += f"🔷 Ethereum (ETH): ${eth_price:,.2f}"
+
+    for row in subscriber_rows:
+        user_id = row[0]
+        try:
+            await app.bot.send_message(chat_id=user_id, text=msg)
+            logging.info(f"Sent 30-min price update to {user_id}")
+        except Exception as e:
+            logging.error(f"Failed to send message to {user_id}: {e}")
 
 def save_alert(user_id, coin_id, alert_type, price=None, low=None, high=None):
     conn = sqlite3.connect("alerts.db")
@@ -406,6 +442,26 @@ async def lastcheck(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No price checks yet.")
 
 
+async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    conn = sqlite3.connect("alerts.db")
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO subscribers (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text("✅ You've subscribed to 30-min BTC/ETH price updates!")
+
+
+async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    conn = sqlite3.connect("alerts.db")
+    cur = conn.cursor()
+    cur.execute("DELETE FROM subscribers WHERE user_id = ?", (user_id,))
+    cur.execute("DELETE FROM eth_subscribers WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text("❌ You've unsubscribed from 30-min updates.")
+
 # Scheduler job
 async def hourly_check(app, override_price=None, override_coin="bitcoin"):
     global last_check_time
@@ -524,10 +580,13 @@ async def main():
         app.add_handler(CommandHandler("clearalerts", clearalerts))  # New!
         app.add_handler(CommandHandler("uptime", uptime))
         app.add_handler(CommandHandler("lastcheck", lastcheck))
+        app.add_handler(CommandHandler("subscribe", subscribe))
+        app.add_handler(CommandHandler("unsubscribe", unsubscribe))
 
         # Start scheduler
         scheduler = AsyncIOScheduler()
         scheduler.add_job(hourly_check, 'interval', minutes=10, args=[app])
+        scheduler.add_job(send_periodic_prices, 'interval', minutes=30, args=[app])  # Every 30 mins
         scheduler.start()
 
         print("Bot started...")
