@@ -16,6 +16,7 @@ from flask import Flask, render_template_string, request
 import smtplib
 from email.mime.text import MIMEText
 
+
 # Setup logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -53,6 +54,8 @@ dashboard_app = Flask(__name__)
 def init_db():
     conn = sqlite3.connect("alerts.db")
     cur = conn.cursor()
+
+    # Main alerts table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,10 +69,11 @@ def init_db():
         )
     """)
 
-
-    # Subscriber tables
+    # Subscription tables
     cur.execute("CREATE TABLE IF NOT EXISTS subscribers (user_id TEXT PRIMARY KEY)")
+    cur.execute("CREATE TABLE IF NOT EXISTS sol_subscribers (user_id TEXT PRIMARY KEY)")
     cur.execute("CREATE TABLE IF NOT EXISTS eth_subscribers (user_id TEXT PRIMARY KEY)")
+    cur.execute("CREATE TABLE IF NOT EXISTS xrp_subscribers (user_id TEXT PRIMARY KEY)")
 
     conn.commit()
     conn.close()
@@ -118,36 +122,6 @@ def load_alerts(include_triggered=False):
     return alerts
 
 
-async def send_periodic_prices(app):
-    logging.info("Sending 30-min BTC & ETH price update...")
-
-    # Get current prices
-    btc_price = get_crypto_price("bitcoin", "btc")
-    eth_price = get_crypto_price("ethereum", "eth")
-
-    if btc_price is None or eth_price is None:
-        logging.warning("Failed to fetch prices for periodic message.")
-        return
-
-    # Get all subscribers
-    conn = sqlite3.connect("alerts.db")
-    cur = conn.cursor()
-    cur.execute("SELECT user_id FROM subscribers")
-    subscriber_rows = cur.fetchall()
-    conn.close()
-
-    # Send messages
-    msg = f"₿ Bitcoin (BTC): ${btc_price:,.2f}\n"
-    msg += f"🔷 Ethereum (ETH): ${eth_price:,.2f}"
-
-    for row in subscriber_rows:
-        user_id = row[0]
-        try:
-            await app.bot.send_message(chat_id=user_id, text=msg)
-            logging.info(f"Sent 30-min price update to {user_id}")
-        except Exception as e:
-            logging.error(f"Failed to send message to {user_id}: {e}")
-
 def save_alert(user_id, coin_id, alert_type, price=None, low=None, high=None):
     conn = sqlite3.connect("alerts.db")
     cur = conn.cursor()
@@ -164,11 +138,12 @@ def save_alert(user_id, coin_id, alert_type, price=None, low=None, high=None):
 def clear_all_alerts():
     conn = sqlite3.connect("alerts.db")
     cur = conn.cursor()
-    cur.execute("DELETE FROM alerts")  # Or set triggered = 1 if you want to keep history
+    cur.execute("DELETE FROM alerts")
     conn.commit()
     conn.close()
 
 
+# Helper functions
 def get_crypto_price(coin_id, symbol, max_retries=2, retry_delay=5, force_price=None):
     global last_known_prices
 
@@ -283,7 +258,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     "Examples:\n"
                                     "  /price btc\n"
                                     "  /setalert eth 3500\n"
-                                    "  /setrangalert sol 140 160")
+                                    "  /setrangalert sol 140 160\n\n"
+                                    "Want regular updates?\n"
+                                    "  /subscribe - BTC/ETH/SOL/XRP every 30 mins\n"
+                                    "  /subscribesol\n"
+                                    "  /subscribexrp")
 
 
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -293,7 +272,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     coin_arg = context.args[0].lower()
     if coin_arg not in COIN_MAP:
-        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol")
+        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol, xrp")
         return
 
     coin_id = COIN_MAP[coin_arg]
@@ -317,7 +296,7 @@ async def setalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_price_str = context.args[1]
 
     if coin_arg not in COIN_MAP:
-        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol")
+        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol, xrp")
         return
 
     try:
@@ -342,7 +321,7 @@ async def setrangalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     high_str = context.args[2]
 
     if coin_arg not in COIN_MAP:
-        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol")
+        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol, xrp")
         return
 
     try:
@@ -388,7 +367,7 @@ async def forcerun(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     coin_arg = context.args[0].lower()
     if coin_arg not in COIN_MAP:
-        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol")
+        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol, xrp")
         return
 
     try:
@@ -402,32 +381,53 @@ async def forcerun(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Manual price check triggered for {coin_arg} @ ${fake_price:,.2f}")
 
 
-async def forcerang(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 3:
-        await update.message.reply_text("Usage: /forcerang <coin> <low> <high>")
-        return
-
-    coin_arg = context.args[0].lower()
-    if coin_arg not in COIN_MAP:
-        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol")
-        return
-
-    try:
-        low = float(context.args[1])
-        high = float(context.args[2])
-    except ValueError:
-        await update.message.reply_text("Invalid price values.")
-        return
-
-    fake_price = (low + high) / 2
-    logging.info(f"[Range Trigger] Simulating price: {coin_arg} @ ${fake_price:,.2f}")
-    await hourly_check(app_instance, override_price=fake_price, override_coin=coin_arg)
-    await update.message.reply_text(f"Manual range check triggered for {coin_arg} between ${low:,.2f} - ${high:,.2f}")
+async def sendprices(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Manually triggering 30-min price update...")
+    if app_instance:
+        await send_periodic_prices(app_instance)
+        await update.message.reply_text("✅ Sent full market update to all subscribers.")
+    else:
+        await update.message.reply_text("❌ Bot not running in polling mode.")
 
 
-async def clearalerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    clear_all_alerts()
-    await update.message.reply_text("All alerts cleared!")
+async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    conn = sqlite3.connect("alerts.db")
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO subscribers (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text("✅ Subscribed to BTC/ETH/SOL/XRP price updates (every 30 mins)")
+
+
+async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    conn = sqlite3.connect("alerts.db")
+    cur = conn.cursor()
+    cur.execute("DELETE FROM subscribers WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text("❌ Unsubscribed from price updates")
+
+
+async def subscribesol(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    conn = sqlite3.connect("alerts.db")
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO sol_subscribers (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text("✅ Subscribed to Solana price updates")
+
+
+async def subscribexrp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    conn = sqlite3.connect("alerts.db")
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO xrp_subscribers (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text("✅ Subscribed to XRP price updates")
 
 
 async def uptime(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -441,26 +441,6 @@ async def lastcheck(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("No price checks yet.")
 
-
-async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    conn = sqlite3.connect("alerts.db")
-    cur = conn.cursor()
-    cur.execute("INSERT OR IGNORE INTO subscribers (user_id) VALUES (?)", (user_id,))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text("✅ You've subscribed to 30-min BTC/ETH price updates!")
-
-
-async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    conn = sqlite3.connect("alerts.db")
-    cur = conn.cursor()
-    cur.execute("DELETE FROM subscribers WHERE user_id = ?", (user_id,))
-    cur.execute("DELETE FROM eth_subscribers WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text("❌ You've unsubscribed from 30-min updates.")
 
 # Scheduler job
 async def hourly_check(app, override_price=None, override_coin="bitcoin"):
@@ -491,7 +471,7 @@ async def hourly_check(app, override_price=None, override_coin="bitcoin"):
                     alert["triggered"] = True
                     triggered.append((user_id, alert))
 
-    # Mark alerts as triggered in DB
+    # Mark alerts as triggered
     conn = sqlite3.connect("alerts.db")
     cur = conn.cursor()
     for user_id, alert in triggered:
@@ -499,7 +479,7 @@ async def hourly_check(app, override_price=None, override_coin="bitcoin"):
     conn.commit()
     conn.close()
 
-    # Send messages to users
+    # Send messages
     for user_id, alert in triggered:
         coin_name = alert.get("coin_id", "BTC").capitalize()
         if "price" in alert:
@@ -509,8 +489,43 @@ async def hourly_check(app, override_price=None, override_coin="bitcoin"):
 
         await app.bot.send_message(chat_id=user_id, text=msg)
 
-    # Update last check time
-    last_check_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+
+# Periodic price message job
+async def send_periodic_prices(app):
+    logging.info("Sending 30-min price update...")
+
+    # Get prices
+    btc_price = get_crypto_price("bitcoin", "btc")
+    eth_price = get_crypto_price("ethereum", "eth")
+    sol_price = get_crypto_price("solana", "sol")
+    xrp_price = get_crypto_price("xrp", "xrp")
+
+    if any(p is None for p in [btc_price, eth_price, sol_price, xrp_price]):
+        logging.warning("Failed to fetch one or more prices. Skipping periodic update.")
+        return
+
+    # Load all general subscribers
+    conn = sqlite3.connect("alerts.db")
+    cur = conn.cursor()
+    cur.execute("SELECT user_id FROM subscribers")
+    subscriber_rows = cur.fetchall()
+    conn.close()
+
+    # Build message
+    msg = "📊 30-Minute Market Update\n\n"
+    msg += f"₿ Bitcoin (BTC): ${btc_price:,.2f}\n"
+    msg += f"🔷 Ethereum (ETH): ${eth_price:,.2f}\n"
+    msg += f"🟣 Solana (SOL): ${sol_price:,.2f}\n"
+    msg += f"🔵 XRP (XRP): ${xrp_price:,.2f}"
+
+    # Send to all subscribers
+    for row in subscriber_rows:
+        user_id = row[0]
+        try:
+            await app.bot.send_message(chat_id=user_id, text=msg)
+            logging.info(f"Sent 30-min update to {user_id}")
+        except Exception as e:
+            logging.error(f"Failed to send to {user_id}: {e}")
 
 
 # Web Dashboard Routes
@@ -576,17 +591,18 @@ async def main():
         app.add_handler(CommandHandler("setrangalert", setrangalert))
         app.add_handler(CommandHandler("listalerts", listalerts))
         app.add_handler(CommandHandler("forcerun", forcerun))
-        app.add_handler(CommandHandler("forcerang", forcerang))  # New!
-        app.add_handler(CommandHandler("clearalerts", clearalerts))  # New!
-        app.add_handler(CommandHandler("uptime", uptime))
-        app.add_handler(CommandHandler("lastcheck", lastcheck))
+        app.add_handler(CommandHandler("sendprices", sendprices))
         app.add_handler(CommandHandler("subscribe", subscribe))
         app.add_handler(CommandHandler("unsubscribe", unsubscribe))
+        app.add_handler(CommandHandler("subscribesol", subscribesol))
+        app.add_handler(CommandHandler("subscribexrp", subscribexrp))
+        app.add_handler(CommandHandler("uptime", uptime))
+        app.add_handler(CommandHandler("lastcheck", lastcheck))
 
         # Start scheduler
         scheduler = AsyncIOScheduler()
         scheduler.add_job(hourly_check, 'interval', minutes=10, args=[app])
-        scheduler.add_job(send_periodic_prices, 'interval', minutes=30, args=[app])  # Every 30 mins
+        scheduler.add_job(send_periodic_prices, 'interval', minutes=30, args=[app])
         scheduler.start()
 
         print("Bot started...")
