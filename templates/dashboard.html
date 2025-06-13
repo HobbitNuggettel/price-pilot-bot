@@ -1,0 +1,23 @@
+<html>
+<body>
+<h2>All Alerts</h2>
+<table border="1" cellpadding="10">
+  <tr><th>User</th><th>Coin</th><th>Type</th><th>Target</th><th>Triggered?</th></tr>
+{% for alert in alerts %}
+  <tr>
+    <td>{{ alert[1] }}</td>
+    <td>{{ alert[2].upper() }}</td>
+    <td>{{ alert[3] }}</td>
+    <td>{{ alert[4] or alert[5] ~ "-" ~ alert[6] or '' }}</td>
+    <td>{{ 'Yes' if alert[7] else 'No' }}</td>
+  </tr>
+{% endfor %}
+</table>
+<br>
+<form action="/test">
+  <input type="text" name="price" placeholder="Price" />
+  <input type="text" name="coin" placeholder="Coin (e.g. btc)" />
+  <button type="submit">Trigger Fake Alert</button>
+</form>
+</body>
+</html>
