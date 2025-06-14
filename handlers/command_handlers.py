@@ -149,6 +149,67 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(msg)
 
+# handlers/command_handlers.py
+
+async def listcoinstop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: /listcoinstop <limit> (e.g., /listcoinstop 10)")
+        return
+
+    try:
+        limit = int(context.args[0])
+        if limit not in [5, 10, 20, 30]:
+            await update.message.reply_text("Limit must be one of: 5, 10, 20, 30")
+            return
+    except ValueError:
+        await update.message.reply_text("Please enter a valid number.")
+        return
+
+    from services.coin_list_service import get_top_coins, format_coin_data
+    raw_data = get_top_coins(limit)
+
+    if not raw_data:
+        await update.message.reply_text("Failed to fetch top coins. Try again later.")
+        return
+
+    msg = f"📈 Top {limit} Cryptocurrencies\n\n"
+    for coin in raw_data:
+        formatted = format_coin_data(coin)
+        msg += formatted["full_str"] + "\n"
+
+    await update.message.reply_text(msg)
+
+async def listcoinsgain(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from services.coin_list_service import get_top_gainers, format_coin_data
+    raw_data = get_top_gainers(10)
+
+    if not raw_data:
+        await update.message.reply_text("Failed to fetch gainers. Try again later.")
+        return
+
+    msg = "📈 Top 10 Gainers (24h)\n\n"
+    for coin in raw_data:
+        formatted = format_coin_data(coin)
+        msg += formatted["full_str"] + "\n"
+
+    await update.message.reply_text(msg)
+
+
+async def listcoinsloss(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from services.coin_list_service import get_top_losers, format_coin_data
+    raw_data = get_top_losers(10)
+
+    if not raw_data:
+        await update.message.reply_text("Failed to fetch losers. Try again later.")
+        return
+
+    msg = "📉 Top 10 Losers (24h)\n\n"
+    for coin in raw_data:
+        formatted = format_coin_data(coin)
+        msg += formatted["full_str"] + "\n"
+
+    await update.message.reply_text(msg)
+
 def register_commands(app):
     from telegram.ext import CommandHandler
     app.add_handler(CommandHandler("start", start))
@@ -160,3 +221,6 @@ def register_commands(app):
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
     app.add_handler(CommandHandler("forcenow", forcenow))
     app.add_handler(CommandHandler("history", history))
+    app.add_handler(CommandHandler("listcoinstop", listcoinstop))
+    app.add_handler(CommandHandler("listcoinsgain", listcoinsgain))
+    app.add_handler(CommandHandler("listcoinsloss", listcoinsloss))
