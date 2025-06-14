@@ -9,7 +9,8 @@ from services.crypto_service import get_crypto_price
 from utils.time_utils import format_time_ago
 from database.database import load_alerts
 from config import COIN_MAP
-from config import last_known_prices 
+
+from utils.price_utils import price_history, MAX_HISTORY_ITEMS, last_known_prices
 
 async def hourly_check(app: Application, override_price=None, override_coin="bitcoin"):
 
@@ -24,7 +25,7 @@ async def hourly_check(app: Application, override_price=None, override_coin="bit
             coin_id = alert.get("coin_id", "bitcoin")
             symbol = next(k for k, v in COIN_MAP.items() if v == coin_id).upper()
 
-            current_price = get_crypto_price(coin_id, symbol)
+            current_price = get_crypto_price(coin_id, symbol,force_price=override_price)
 
             if current_price is None:
                 continue
@@ -56,7 +57,10 @@ async def hourly_check(app: Application, override_price=None, override_coin="bit
         else:
             msg = f"🔔 {coin_name} is in your target range: ${alert['low']:,.2f} - ${alert['high']:,.2f}"
 
-        await app.bot.send_message(chat_id=user_id, text=msg)
+        try: 
+           await app.bot.send_message(chat_id=user_id, text=msg)
+        except Exception as e:
+            logging.error(f"Failed to send to {user_id}: {e}")
 
     last_check_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 
@@ -64,16 +68,16 @@ async def hourly_check(app: Application, override_price=None, override_coin="bit
 async def send_periodic_prices(app: Application):
     logging.info("Sending 30-min BTC/ETH/SOL/XRP price update...")
 
-    coins = ["bitcoin", "ethereum", "solana", "xrp"]
-    symbols = [k.upper() for k in COIN_MAP.keys()]
-    prices = {}
+    from config import COIN_MAP
+    from services.crypto_service import get_crypto_price
 
-    for coin_id, symbol in zip(coins, symbols):
+    prices = {}
+    for symbol, coin_id in COIN_MAP.items():
         price = get_crypto_price(coin_id, symbol)
         if price:
             prices[coin_id] = price
 
-    if len(prices) < 4:
+    if not prices:
         logging.warning("Failed to fetch one or more prices. Skipping periodic update.")
         return
 

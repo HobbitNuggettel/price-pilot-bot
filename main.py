@@ -10,6 +10,7 @@ from telegram._update import Update
 from telegram.ext import ContextTypes, ApplicationBuilder
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
+from utils.price_utils import price_history, MAX_HISTORY_ITEMS
 
 # Load config
 from config import TELEGRAM_BOT_TOKEN, COIN_MAP, HEADERS, last_known_prices

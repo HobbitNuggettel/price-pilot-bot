@@ -9,6 +9,7 @@ from database.database import load_alerts
 from utils.time_utils import format_time_ago
 from utils.forcenow import forcenow
 from config import last_known_prices
+from utils.price_utils import price_history, MAX_HISTORY_ITEMS
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,6 +113,42 @@ async def sendprices(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Sent market update to all subscribers!")
 
 
+async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: /history <coin> (e.g., /history btc)")
+        return
+
+    coin_arg = context.args[0].lower()
+    from config import COIN_MAP
+
+    if coin_arg == "all":
+        msg = "📈 Full Price History\n\n"
+        from config import COIN_MAP
+        from utils.price_utils import price_history
+        for coin_id in COIN_MAP.values():
+            if coin_id in price_history and price_history[coin_id]:
+                last_price, ts = price_history[coin_id][-1]
+                msg += f"{coin_id.capitalize()}: ${last_price:,.2f} (Last updated: {ts})\n"
+        await update.message.reply_text(msg)
+        return
+
+    if coin_arg not in COIN_MAP:
+        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol, xrp, all")
+        return
+
+    coin_id = COIN_MAP[coin_arg]
+    from utils.price_utils import price_history
+
+    if coin_id not in price_history or not price_history[coin_id]:
+        await update.message.reply_text(f"No history available for {coin_id.capitalize()}")
+        return
+
+    msg = f"📈 {coin_id.capitalize()} Price History:\n\n"
+    for price, ts in reversed(price_history[coin_id][-5:]):  # Last 5 entries
+        msg += f"{ts} → ${price:,.2f}\n"
+
+    await update.message.reply_text(msg)
+
 def register_commands(app):
     from telegram.ext import CommandHandler
     app.add_handler(CommandHandler("start", start))
@@ -122,3 +159,4 @@ def register_commands(app):
     app.add_handler(CommandHandler("subscribe", subscribe))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
     app.add_handler(CommandHandler("forcenow", forcenow))
+    app.add_handler(CommandHandler("history", history))

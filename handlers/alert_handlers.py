@@ -29,6 +29,9 @@ async def setalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_alert(user_id, coin_id, "price", price=target_price)
     await update.message.reply_text(f"{coin_id.capitalize()} alert set at ${target_price:,.2f}")
 
+def register_alert_handlers(app):
+    from telegram.ext import CommandHandler
+    app.add_handler(CommandHandler("setalert", setalert))
 
 async def setrangalert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 3:
