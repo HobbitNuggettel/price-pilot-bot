@@ -1,226 +1,78 @@
 # handlers/command_handlers.py
 
+import logging
 from telegram._update import Update
 from telegram.ext import ContextTypes
 import sqlite3  # Required for subscriptions
 from config import COIN_MAP 
-from services.crypto_service import get_crypto_price
-from database.database import load_alerts
-from utils.time_utils import format_time_ago
+from handlers.alert_handlers import export_alerts, listalerts, setalert, setchangealert, setrangalert, setvolumealert
+from handlers.graph_command import graph
+from handlers.manual_handlers import forcerun, history, sendprices, subscribe, unsubscribe
+from handlers.market_handlers import listcoinsgain, listcoinsloss, listcoinstop
+from handlers.news_handlers import news
+from handlers.portfolio_handlers import buy, portfolio, sell, viewportfolio
+from handlers.price_handlers import price, price_btc, price_eth, price_sol, price_usdt, price_xrp
 from utils.forcenow import forcenow
 from config import last_known_prices
 from utils.price_utils import price_history, MAX_HISTORY_ITEMS
+from handlers.misc_handlers import start, help_command
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome to Price Pilot Bot!\n\n"
-                                    "Use /price <coin> to get current crypto price.\n"
-                                    "Examples:\n"
-                                    "  /price btc\n"
-                                    "  /setalert eth 3500\n"
-                                    "  /setrangalert sol 140 160\n\n"
-                                    "Want regular updates?\n"
-                                    "  /subscribe - BTC/ETH/SOL/XRP every 30 mins")
-
-
-async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("Usage: /price <coin> (e.g., /price btc)")
-        return
-
-    coin_arg = context.args[0].lower()
-    if coin_arg not in COIN_MAP:
-        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol, xrp")
-        return
-
-    coin_id = COIN_MAP[coin_arg]
-    symbol = coin_arg.upper()
-    current_price = get_crypto_price(coin_id, symbol)
-
-    if current_price is not None:
-        timestamp = last_known_prices.get(coin_id, (None, "N/A"))[1]
-        time_msg = f" (Updated {format_time_ago(timestamp)}"
-        await update.message.reply_text(f"{symbol} Price: ${current_price:,.2f}{time_msg}")
-    else:
-        await update.message.reply_text(f"Failed to fetch {symbol} price.")
-
-
-async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    conn = sqlite3.connect("alerts.db")
-    cur = conn.cursor()
-    cur.execute("INSERT OR IGNORE INTO subscribers (user_id) VALUES (?)", (user_id,))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text("✅ Subscribed to BTC/ETH/SOL/XRP price updates (every 30 mins)")
-
-
-async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    conn = sqlite3.connect("alerts.db")
-    cur = conn.cursor()
-    cur.execute("DELETE FROM subscribers WHERE user_id = ?", (user_id,))
-    cur.execute("DELETE FROM sol_subscribers WHERE user_id = ?", (user_id,))
-    cur.execute("DELETE FROM xrp_subscribers WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-    await update.message.reply_text("❌ Unsubscribed from price updates")
-
-
-async def listalerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    alerts = load_alerts().get(user_id, [])
-
-    if not alerts:
-        await update.message.reply_text("You have no active alerts.")
-        return
-
-    msg = "Your active alerts:\n"
-    for i, alert in enumerate(alerts):
-        coin_name = alert.get("coin_id", "unknown").capitalize()
-        if "price" in alert:
-            msg += f"{i+1}. {coin_name} Target: ${alert['price']:,.2f}\n"
-        elif "low" in alert and "high" in alert:
-            msg += f"{i+1}. {coin_name} Range: ${alert['low']:,.2f} - ${alert['high']:,.2f}\n"
-
-    await update.message.reply_text(msg)
-
-
-async def forcerun(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 2:
-        await update.message.reply_text("Usage: /forcerun <coin> <price>")
-        return
-
-    coin_arg = context.args[0].lower()
-    if coin_arg not in COIN_MAP:
-        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol, xrp")
-        return
-
-    try:
-        fake_price = float(context.args[1])
-    except ValueError:
-        await update.message.reply_text("Invalid price value.")
-        return
-
-    from handlers.job_handlers import hourly_check
-    await hourly_check(context.application, override_price=fake_price, override_coin=COIN_MAP[coin_arg])
-    await update.message.reply_text(f"Manual check done for {coin_arg.upper()} @ ${fake_price:,.2f}")
-
-
-async def sendprices(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from handlers.job_handlers import send_periodic_prices
-    await send_periodic_prices(context.application.bot._application)
-    await update.message.reply_text("✅ Sent market update to all subscribers!")
-
-
-async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("Usage: /history <coin> (e.g., /history btc)")
-        return
-
-    coin_arg = context.args[0].lower()
-    from config import COIN_MAP
-
-    if coin_arg == "all":
-        msg = "📈 Full Price History\n\n"
-        from config import COIN_MAP
-        from utils.price_utils import price_history
-        for coin_id in COIN_MAP.values():
-            if coin_id in price_history and price_history[coin_id]:
-                last_price, ts = price_history[coin_id][-1]
-                msg += f"{coin_id.capitalize()}: ${last_price:,.2f} (Last updated: {ts})\n"
-        await update.message.reply_text(msg)
-        return
-
-    if coin_arg not in COIN_MAP:
-        await update.message.reply_text(f"Unsupported coin: {coin_arg}. Supported: btc, eth, sol, xrp, all")
-        return
-
-    coin_id = COIN_MAP[coin_arg]
-    from utils.price_utils import price_history
-
-    if coin_id not in price_history or not price_history[coin_id]:
-        await update.message.reply_text(f"No history available for {coin_id.capitalize()}")
-        return
-
-    msg = f"📈 {coin_id.capitalize()} Price History:\n\n"
-    for price, ts in reversed(price_history[coin_id][-5:]):  # Last 5 entries
-        msg += f"{ts} → ${price:,.2f}\n"
-
-    await update.message.reply_text(msg)
-
-# handlers/command_handlers.py
-
-async def listcoinstop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("Usage: /listcoinstop <limit> (e.g., /listcoinstop 10)")
-        return
-
-    try:
-        limit = int(context.args[0])
-        if limit not in [5, 10, 20, 30]:
-            await update.message.reply_text("Limit must be one of: 5, 10, 20, 30")
-            return
-    except ValueError:
-        await update.message.reply_text("Please enter a valid number.")
-        return
-
-    from services.coin_list_service import get_top_coins, format_coin_data
-    raw_data = get_top_coins(limit)
-
-    if not raw_data:
-        await update.message.reply_text("Failed to fetch top coins. Try again later.")
-        return
-
-    msg = f"📈 Top {limit} Cryptocurrencies\n\n"
-    for coin in raw_data:
-        formatted = format_coin_data(coin)
-        msg += formatted["full_str"] + "\n"
-
-    await update.message.reply_text(msg)
-
-async def listcoinsgain(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from services.coin_list_service import get_top_gainers, format_coin_data
-    raw_data = get_top_gainers(10)
-
-    if not raw_data:
-        await update.message.reply_text("Failed to fetch gainers. Try again later.")
-        return
-
-    msg = "📈 Top 10 Gainers (24h)\n\n"
-    for coin in raw_data:
-        formatted = format_coin_data(coin)
-        msg += formatted["full_str"] + "\n"
-
-    await update.message.reply_text(msg)
-
-
-async def listcoinsloss(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from services.coin_list_service import get_top_losers, format_coin_data
-    raw_data = get_top_losers(10)
-
-    if not raw_data:
-        await update.message.reply_text("Failed to fetch losers. Try again later.")
-        return
-
-    msg = "📉 Top 10 Losers (24h)\n\n"
-    for coin in raw_data:
-        formatted = format_coin_data(coin)
-        msg += formatted["full_str"] + "\n"
-
-    await update.message.reply_text(msg)
 
 def register_commands(app):
     from telegram.ext import CommandHandler
+
+     # Misc
+
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+
+    # Price commands
+
     app.add_handler(CommandHandler("price", price))
+     # Single-command price shortcuts
+    app.add_handler(CommandHandler("pricebtc", price_btc))
+    app.add_handler(CommandHandler("priceeth", price_eth))
+    app.add_handler(CommandHandler("pricesol", price_sol))
+    app.add_handler(CommandHandler("pricexrp", price_xrp))
+    app.add_handler(CommandHandler("priceusdt", price_usdt))
+
+    # Alerts
+
     app.add_handler(CommandHandler("listalerts", listalerts))
+    app.add_handler(CommandHandler("setalert", setalert))
+    app.add_handler(CommandHandler("setrangalert", setrangalert))
+    app.add_handler(CommandHandler("export_alerts", export_alerts))
+    app.add_handler(CommandHandler("setchangealert", setchangealert))
+    app.add_handler(CommandHandler("setvolumealert", setvolumealert))
+
+
+     # Admin/manual commands
+
     app.add_handler(CommandHandler("forcerun", forcerun))
     app.add_handler(CommandHandler("sendprices", sendprices))
     app.add_handler(CommandHandler("subscribe", subscribe))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
     app.add_handler(CommandHandler("forcenow", forcenow))
     app.add_handler(CommandHandler("history", history))
+
+     # Market updates
+
     app.add_handler(CommandHandler("listcoinstop", listcoinstop))
     app.add_handler(CommandHandler("listcoinsgain", listcoinsgain))
     app.add_handler(CommandHandler("listcoinsloss", listcoinsloss))
+
+     # Graph 
+
+    app.add_handler(CommandHandler("graph", graph))
+
+    # News
+
+    app.add_handler(CommandHandler("news", news))
+
+     # Portfolio
+
+    app.add_handler(CommandHandler("portfolio", portfolio))
+    app.add_handler(CommandHandler("viewportfolio", viewportfolio))
+    app.add_handler(CommandHandler("sell", sell))
+    app.add_handler(CommandHandler("buy", buy))

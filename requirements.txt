@@ -4,3 +4,5 @@ APScheduler
 python-dotenv
 nest_asyncio
 flask
+matplotlib
+pandas

@@ -12,12 +12,15 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 # CoinMarketCap API key (optional)
 COINMARKETCAP_API_KEY = os.getenv("COINMARKETCAP_API_KEY")
 
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+
 # Supported coin mapping
 COIN_MAP = {
     "btc": "bitcoin",
     "eth": "ethereum",
     "sol": "solana",
-    "xrp": "xrp"
+    "xrp": "xrp",
+    "usdt":"usdt"
 }
 
 # Headers for API requests
